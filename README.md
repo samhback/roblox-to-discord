@@ -1,119 +1,67 @@
 # roblox-to-discord
-This is how you can send messages from ingame Roblox to Discord using AWS lambda functions and Discord Webhooks!
+Why?
+Sending messages from Roblox to Discord can be useful, specifically for moderation. You can use it to detect cheating and then immediately message your server with the players username. Or you can trigger it for ingame events, to get players excited to hop on.
 
-Want to make your own NPC’s where you build their background and then respond as the person you want them to be? In this tutorial I’ll show you how!
+Why this way?
+Discord at some point blocked messages coming from Roblox. This was likely due to a high amount of traffic from Roblox. This method uses a “Proxy” schema, which means it sends the message to a midpoint before forwarding it to Roblox. This way is also good because you only have to add the AWS code once, and then every webhook message you send to it with different URLs can be forwarded.
 
-Go to https://platform.openai.com/playground/assistants 5 make an account and create an assistant. To call this API it will cause an extremely small amount of money per the tokens you use so you’ll need to put money into your account.
+Discord Side
+Inside your Discord server, select a channel you want your bot to post the messages from your roblox game, click the cog and click edit channel.
+Click Create Webhook, and then click the bot that was automatically made. Here you can change the name and copy the webhook URL. Save that webhook URL for later.
+AWS Side
 
-Select your model. I would recommend going with any 3.5 turbo model, it will be quick but it will be cheaper. The more advanced the version you pick, the better the responses are going to be to the bio you give.
+Log into AWS as root user, click the search bar, and search “Lambda”.
+Create a Lambda function. When creating the function, select Python as your language of choice and paste the following code:
+import json
+import requests
 
-Give it a name. I gave it the name “Bob the medieval guy”
+def lambda_handler(event, context):
+    body = json.loads(event['body'])
+    data = {
+    'content': body['message'],  # The message text
+    'username': body['bottitle'],  # Custom username for the webhook message
+    }
+    response = requests.post(body['webhook'], data=json.dumps(data), headers={'Content-Type': 'application/json'})
+    return {
+        'statusCode': 200,
+        'body': json.dumps('success')
+    }
+Save, and then search API Gateway and make a HTTPs API Gateway function. When creating the API gateway, select Lambda in the dropdown and then select your lambda function that you made earlier.
 
-Give it a description under instructions, the more details you give the better. I said: You’re bob, a medieval peasant who doesn’t know much. You have the education of a kindergartener and all you do is farm your entire life. You have a hard time speaking good english and your speech is broken and barely understandable. You can ask it questions in the browser to see how it responds before you use it.
+In the settings/config of the API Gateway that you made, copy the URL.
 
-Under your NPC name, copy the assistant id, will look something like asst_awwbdhwbibawdhbwaudwndwd and add it into the module script where it says local assistantId = ‘asst_’
-
-Click settings, click your profile, click user API keys, create an API key, and copy it and add it in where it says local apiKey = ‘’
-
-Put the module script where you want it and call is like this:
-
-local gpt = require(game.ServerScriptService.AskGPT)
-gpt.ask("what color is the sky?")
-The response it gave me was: Sky blue! Sky always blue, sometimes grey. Sky pretty, like flowers!
-(remember this particular peasant is a medieval npc)
-
-Module script:
-
-local apiKey = -- Replace with your API key
-local assistantId = 
-
+Roblox Side
+Create a module script and paste the following code, be sure to change where it has the aws & discord webhook url.
 local HttpService = game:GetService("HttpService")
-local function httpPost(url, data, headers)
-	local response = HttpService:RequestAsync({
-		Url = url,
-		Method = "POST",
-		Headers = headers,
-		Body = HttpService:JSONEncode(data)
-	})
-	return response
-end
+local CONST_WEBHOOK = "DISCORD_API_WEBHOOK_HERE"
+local CONST_AWS = "AWS_API_GATEWAY_URL_HERE"
+local robloxToDiscord = {}
 
--- Function to make HTTP GET request
-local function httpGet(url, headers)
-	local response = HttpService:RequestAsync({
-		Url = url,
-		Method = "GET",
-		Headers = headers
-	})
-	return response
-end
+function robloxToDiscord.webhook(msg)
+	local data = {
+		message = msg,
+		webhook = CONST_WEBHOOK,
+		bottitle = "Admin Command Ran"
+	}
 
-local function waitForRunCompletion(threadId, runId, apiKey, timeout)
-	timeout = timeout or 50
-	local startTime = tick()
+	-- Serialize your Lua table to a JSON string
+	local jsonData = HttpService:JSONEncode(data)
+	
+	local success, response = pcall(function()
+		return HttpService:PostAsync(CONST_AWS, jsonData, Enum.HttpContentType.ApplicationJson)
+	end)
 
-	while tick() - startTime < timeout do
-		local statusResponse = httpGet(
-			"https://api.openai.com/v1/threads/" .. threadId .. "/runs/" .. runId,
-			{["Authorization"] = "Bearer " .. apiKey,
-				["Content-Type"] = "application/json",
-				["OpenAI-Beta"] = "assistants=v1"}
-		)
-		local runStatus = HttpService:JSONDecode(statusResponse.Body).status
-
-		print(runStatus)
-
-		if runStatus == 'completed' then
-			return statusResponse
-		elseif runStatus == 'failed' then
-			error("Run failed.")
-			break
-		end
-
-		wait(1)  -- Delay before the next status check
+	-- Check if the request was successful and print the response
+	if success then
+		return "Successfully sent webhook call"
+	else
+		warn("HTTP request failed: " .. tostring(response))
+		return "Failure!"
 	end
-
-	error("Run did not complete within the specified timeout.")
 end
 
-
-local agpt = {}
-
-function agpt.ask(question)
-	local threadResponse = httpPost(
-		"https://api.openai.com/v1/threads",
-		{messages = {{["role"] = "user", ["content"] = question}}},
-		{["Authorization"] = "Bearer " .. apiKey,
-			["Content-Type"] = "application/json",
-			["OpenAI-Beta"] = "assistants=v1"}
-	)
-	local thread = HttpService:JSONDecode(threadResponse.Body)
-	print(thread)
-	-- Create run
-	local runResponse = httpPost(
-		"https://api.openai.com/v1/threads/" .. thread.id .. "/runs",
-		{assistant_id = assistantId},
-		{["Authorization"] = "Bearer " .. apiKey,
-			["Content-Type"] = "application/json",
-			["OpenAI-Beta"] = "assistants=v1"}
-	)
-	local run = HttpService:JSONDecode(runResponse.Body)
-
-	-- Wait for completion
-	local completedRun = waitForRunCompletion(thread.id, run.id, apiKey, 60)
-
-	-- Retrieve messages
-	local messagesResponse = httpGet(
-		"https://api.openai.com/v1/threads/" .. thread.id .. "/messages",
-		{["Authorization"] = "Bearer " .. apiKey,
-			["Content-Type"] = "application/json",
-			["OpenAI-Beta"] = "assistants=v1"}
-	)
-	local messages = HttpService:JSONDecode(messagesResponse.Body)
-
-	-- Log messages
-	print(messages.data[1].content[1].text.value)
-end
-return agpt
-
-That’s the tutorial, be careful with your usage, You don’t want to use it where it would be spammed, unless you make a lot of money from the game you use it in. Thanks for reading!
+return robloxToDiscord
+Call the module like so:
+local r2d = require(game.ServerScriptService.RobloxToDiscord)
+r2d.webhook(“Ahoy!”)
+There you have it, thanks for reading! This should end up being free unless you spam it, because the free tier allots for a lot of calls. I use it to monitor admin command usage.
